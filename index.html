@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>Pocket Alarm</title>
+<style>
+  :root {
+    --bg: #111418; --card: #1b2027; --text: #eef1f5; --muted: #8b95a3;
+    --accent: #3ddc84; --danger: #ff3b30; --border: #2a313b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+    transition: background .15s;
+  }
+  body.alarm { animation: flash .4s steps(1) infinite; }
+  @keyframes flash { 0% { background: #ff3b30; } 50% { background: #111418; } }
+  main { max-width: 480px; margin: 0 auto; padding: 20px 0 40px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; font-size: .95rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  button {
+    width: 100%; padding: 16px; font-size: 1.1rem; font-weight: 600; border: 0; border-radius: 12px;
+    background: var(--accent); color: #06210f; cursor: pointer;
+  }
+  button.stop { background: var(--danger); color: #fff; }
+  button.secondary { background: var(--border); color: var(--text); font-size: .95rem; padding: 12px; margin-top: 10px; }
+  .readout { font-size: 3rem; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
+  .readout small { font-size: 1rem; color: var(--muted); font-weight: 400; }
+  .bar { height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .05s; }
+  .row { display: flex; justify-content: space-between; color: var(--muted); font-size: .9rem; margin-top: 8px; }
+  label { display: block; font-size: .95rem; margin-bottom: 6px; }
+  input[type=range] { width: 100%; }
+  .status { text-align: center; font-weight: 600; margin: 0 0 12px; }
+  .status.armed { color: var(--accent); }
+  .status.alarm { color: var(--danger); }
+  .note { color: var(--muted); font-size: .85rem; line-height: 1.4; }
+  .err { color: #ffb4ae; font-size: .9rem; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pocket Alarm</h1>
+  <p class="sub">Buzzes and sounds an alarm when your phone is falling.</p>
+
+  <div class="card">
+    <p id="status" class="status">Not armed</p>
+    <button id="toggle">Arm alarm</button>
+    <div id="err" class="err" hidden></div>
+  </div>
+
+  <div class="card">
+    <div class="readout"><span id="g">–</span> <small>g</small></div>
+    <div class="bar"><div id="gbar"></div></div>
+    <div class="row"><span>Lowest recent: <b id="gmin">–</b> g</span><span>Free fall ≈ 0 g, rest ≈ 1 g</span></div>
+  </div>
+
+  <div class="card">
+    <label for="thresh">Fall threshold: <b id="threshVal">0.35</b> g</label>
+    <input id="thresh" type="range" min="0.1" max="0.8" step="0.05" value="0.35">
+    <label for="dur" style="margin-top:14px">Must stay below for: <b id="durVal">80</b> ms</label>
+    <input id="dur" type="range" min="30" max="300" step="10" value="80">
+    <p class="note">Higher threshold or shorter time = more sensitive (more false alarms). Pull the phone out of a pocket and watch "Lowest recent" to tune these.</p>
+  </div>
+
+  <div class="card">
+    <button id="test" class="secondary" style="margin-top:0">Test alarm</button>
+    <p class="note" style="margin-bottom:0">Do this once after arming to make sure sound plays. Keep the ringer switch off silent and volume up.</p>
+  </div>
+
+  <p class="note" id="support"></p>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const toggleBtn = $('toggle'), statusEl = $('status'), errEl = $('err');
+  const gEl = $('g'), gBar = $('gbar'), gMinEl = $('gmin');
+  const thresh = $('thresh'), dur = $('dur');
+
+  let armed = false, alarming = false;
+  let audioCtx = null, osc = null, gain = null, sirenTimer = null, vibTimer = null;
+  let wakeLock = null;
+  let belowSince = null, recentMin = Infinity, minResetTimer = null;
+
+  thresh.oninput = () => $('threshVal').textContent = (+thresh.value).toFixed(2);
+  dur.oninput = () => $('durVal').textContent = dur.value;
+
+  const canVibrate = 'vibrate' in navigator;
+  $('support').textContent = canVibrate
+    ? 'Vibration: supported on this browser.'
+    : 'Vibration is not supported here (iPhone browsers can’t vibrate from web pages), so the screen flashes and the alarm sounds instead.';
+
+  function showErr(msg) { errEl.textContent = msg; errEl.hidden = !msg; }
+
+  // ---------- Audio ----------
+  function ensureAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    // play a silent buffer to unlock audio on iOS
+    const b = audioCtx.createBuffer(1, 1, 22050);
+    const s = audioCtx.createBufferSource();
+    s.buffer = b; s.connect(audioCtx.destination); s.start(0);
+  }
+
+  function startSiren() {
+    ensureAudio();
+    osc = audioCtx.createOscillator();
+    gain = audioCtx.createGain();
+    osc.type = 'square';
+    gain.gain.value = 1;
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    let hi = false;
+    const swap = () => {
+      hi = !hi;
+      osc.frequency.setValueAtTime(hi ? 1400 : 800, audioCtx.currentTime);
+    };
+    swap();
+    sirenTimer = setInterval(swap, 250);
+  }
+
+  function stopSiren() {
+    clearInterval(sirenTimer); sirenTimer = null;
+    if (osc) { try { osc.stop(); } catch (e) {} osc.disconnect(); osc = null; }
+  }
+
+  // ---------- Alarm ----------
+  function triggerAlarm() {
+    if (alarming) return;
+    alarming = true;
+    document.body.classList.add('alarm');
+    setStatus('ALARM! Tap to silence', 'alarm');
+    toggleBtn.textContent = 'Silence alarm';
+    toggleBtn.classList.add('stop');
+    startSiren();
+    if (canVibrate) {
+      navigator.vibrate([400, 150, 400, 150, 400]);
+      vibTimer = setInterval(() => navigator.vibrate([400, 150, 400, 150, 400]), 1300);
+    }
+  }
+
+  function stopAlarm() {
+    alarming = false;
+    document.body.classList.remove('alarm');
+    stopSiren();
+    clearInterval(vibTimer); vibTimer = null;
+    if (canVibrate) navigator.vibrate(0);
+    belowSince = null;
+  }
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = 'status ' + (cls || '');
+  }
+
+  // ---------- Motion ----------
+  function onMotion(e) {
+    const a = e.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    const g = Math.hypot(a.x, a.y, a.z) / 9.81;
+
+    gEl.textContent = g.toFixed(2);
+    gBar.style.width = Math.min(g / 3, 1) * 100 + '%';
+    if (g < recentMin) { recentMin = g; gMinEl.textContent = g.toFixed(2); }
+
+    if (!armed || alarming) return;
+
+    const now = performance.now();
+    if (g < +thresh.value) {
+      if (belowSince === null) belowSince = now;
+      else if (now - belowSince >= +dur.value) triggerAlarm();
+    } else {
+      belowSince = null;
+    }
+  }
+
+  async function requestMotionPermission() {
+    if (typeof DeviceMotionEvent === 'undefined') {
+      throw new Error('This device/browser has no motion sensor access. Try on your phone, not a laptop.');
+    }
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      const res = await DeviceMotionEvent.requestPermission();
+      if (res !== 'granted') throw new Error('Motion permission denied. On iPhone: Settings > Safari > Motion & Orientation Access (or reload and allow).');
+    }
+  }
+
+  async function getWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+      }
+    } catch (e) { /* not critical */ }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (armed && document.visibilityState === 'visible') getWakeLock();
+  });
+
+  async function arm() {
+    showErr('');
+    try {
+      ensureAudio();
+      await requestMotionPermission();
+    } catch (e) { showErr(e.message); return; }
+    window.addEventListener('devicemotion', onMotion);
+    await getWakeLock();
+    armed = true;
+    belowSince = null;
+    toggleBtn.textContent = 'Disarm';
+    toggleBtn.classList.add('stop');
+    setStatus('Armed – keep this page open and screen on', 'armed');
+    clearInterval(minResetTimer);
+    minResetTimer = setInterval(() => { recentMin = Infinity; gMinEl.textContent = '–'; }, 10000);
+  }
+
+  function disarm() {
+    armed = false;
+    stopAlarm();
+    window.removeEventListener('devicemotion', onMotion);
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    clearInterval(minResetTimer);
+    toggleBtn.textContent = 'Arm alarm';
+    toggleBtn.classList.remove('stop');
+    setStatus('Not armed');
+  }
+
+  toggleBtn.onclick = () => {
+    if (alarming) {
+      // silence but stay armed
+      stopAlarm();
+      toggleBtn.textContent = 'Disarm';
+      setStatus('Armed – keep this page open and screen on', 'armed');
+    } else if (armed) {
+      disarm();
+    } else {
+      arm();
+    }
+  };
+
+  $('test').onclick = () => {
+    ensureAudio();
+    if (!armed) {
+      // allow testing without arming
+      armed = true; triggerAlarm(); armed = false;
+      toggleBtn.textContent = 'Silence alarm';
+      toggleBtn.onclick = () => { stopAlarm(); toggleBtn.textContent = 'Arm alarm'; toggleBtn.classList.remove('stop'); setStatus('Not armed'); toggleBtn.onclick = origClick; };
+    } else {
+      triggerAlarm();
+    }
+  };
+  const origClick = toggleBtn.onclick;
+})();
+</script>
+</body>
+</html>
