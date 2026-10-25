@@ -11,12 +11,11 @@
     --accent: #3ddc84; --danger: #ff3b30; --border: #2a313b;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
+  html, body { margin: 0; min-height: 100%; }
   body {
     background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
-    transition: background .15s;
   }
   body.alarm { animation: flash .4s steps(1) infinite; }
   @keyframes flash { 0% { background: #ff3b30; } 50% { background: #111418; } }
@@ -29,12 +28,18 @@
     background: var(--accent); color: #06210f; cursor: pointer;
   }
   button.stop { background: var(--danger); color: #fff; }
-  button.secondary { background: var(--border); color: var(--text); font-size: .95rem; padding: 12px; margin-top: 10px; }
-  .readout { font-size: 3rem; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
-  .readout small { font-size: 1rem; color: var(--muted); font-weight: 400; }
-  .bar { height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; margin-top: 8px; }
+  button.secondary { background: var(--border); color: var(--text); font-size: .95rem; padding: 12px; }
+  .seg { display: flex; background: var(--border); border-radius: 12px; padding: 4px; gap: 4px; }
+  .seg button { flex: 1; background: transparent; color: var(--muted); padding: 10px; font-size: .95rem; border-radius: 9px; }
+  .seg button.on { background: var(--card); color: var(--text); }
+  .seg button:disabled { opacity: .5; cursor: not-allowed; }
+  .modeinfo { color: var(--muted); font-size: .88rem; line-height: 1.4; margin: 12px 0 0; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .grid .v { font-size: 1.9rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .grid .l { color: var(--muted); font-size: .8rem; }
+  .bar { height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; margin-top: 12px; }
   .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .05s; }
-  .row { display: flex; justify-content: space-between; color: var(--muted); font-size: .9rem; margin-top: 8px; }
+  .row { display: flex; justify-content: space-between; color: var(--muted); font-size: .85rem; margin-top: 8px; }
   label { display: block; font-size: .95rem; margin-bottom: 6px; }
   input[type=range] { width: 100%; }
   .status { text-align: center; font-weight: 600; margin: 0 0 12px; }
@@ -42,12 +47,21 @@
   .status.alarm { color: var(--danger); }
   .note { color: var(--muted); font-size: .85rem; line-height: 1.4; }
   .err { color: #ffb4ae; font-size: .9rem; margin-top: 10px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
   <h1>Pocket Alarm</h1>
-  <p class="sub">Buzzes and sounds an alarm when your phone is falling.</p>
+  <p class="sub">Buzzes and sounds an alarm when your phone is falling or sliding out.</p>
+
+  <div class="card">
+    <div class="seg" id="modes">
+      <button data-mode="fall" class="on">Free-fall</button>
+      <button data-mode="bike">Biking</button>
+    </div>
+    <p class="modeinfo" id="modeinfo"></p>
+  </div>
 
   <div class="card">
     <p id="status" class="status">Not armed</p>
@@ -56,22 +70,36 @@
   </div>
 
   <div class="card">
-    <div class="readout"><span id="g">–</span> <small>g</small></div>
+    <div class="grid">
+      <div><div class="v" id="g">–</div><div class="l">g-force</div></div>
+      <div><div class="v" id="tilt">–</div><div class="l">tilt shift °</div></div>
+      <div><div class="v" id="rot">–</div><div class="l">spin °/s</div></div>
+    </div>
     <div class="bar"><div id="gbar"></div></div>
-    <div class="row"><span>Lowest recent: <b id="gmin">–</b> g</span><span>Free fall ≈ 0 g, rest ≈ 1 g</span></div>
+    <div class="row"><span>Lowest g (10s): <b id="gmin">–</b></span><span id="trigInfo"></span></div>
   </div>
 
-  <div class="card">
+  <div class="card" id="fallSettings">
     <label for="thresh">Fall threshold: <b id="threshVal">0.35</b> g</label>
     <input id="thresh" type="range" min="0.1" max="0.8" step="0.05" value="0.35">
     <label for="dur" style="margin-top:14px">Must stay below for: <b id="durVal">80</b> ms</label>
     <input id="dur" type="range" min="30" max="300" step="10" value="80">
-    <p class="note">Higher threshold or shorter time = more sensitive (more false alarms). Pull the phone out of a pocket and watch "Lowest recent" to tune these.</p>
+    <p class="note">Higher threshold or shorter time = more sensitive (more false alarms).</p>
+  </div>
+
+  <div class="card" id="bikeSettings" hidden>
+    <label for="tiltT">Slide-out angle: <b id="tiltTVal">45</b>°</label>
+    <input id="tiltT" type="range" min="20" max="80" step="5" value="45">
+    <label for="hold" style="margin-top:14px">Hold for: <b id="holdVal">250</b> ms</label>
+    <input id="hold" type="range" min="100" max="600" step="25" value="250">
+    <label for="dip" style="margin-top:14px">Partial-drop level: <b id="dipVal">0.55</b> g</label>
+    <input id="dip" type="range" min="0.3" max="0.9" step="0.05" value="0.55">
+    <p class="note">Lower angle / shorter hold / higher drop level = more sensitive. If you get false alarms on bumpy roads, raise the angle or hold time.</p>
   </div>
 
   <div class="card">
-    <button id="test" class="secondary" style="margin-top:0">Test alarm</button>
-    <p class="note" style="margin-bottom:0">Do this once after arming to make sure sound plays. Keep the ringer switch off silent and volume up.</p>
+    <button id="test" class="secondary">Test alarm</button>
+    <p class="note" style="margin-bottom:0">Check that sound plays. Keep the ringer switch off silent and the volume up.</p>
   </div>
 
   <p class="note" id="support"></p>
@@ -81,122 +109,196 @@
 (() => {
   const $ = id => document.getElementById(id);
   const toggleBtn = $('toggle'), statusEl = $('status'), errEl = $('err');
-  const gEl = $('g'), gBar = $('gbar'), gMinEl = $('gmin');
-  const thresh = $('thresh'), dur = $('dur');
+  const modeBtns = [...document.querySelectorAll('#modes button')];
 
-  let armed = false, alarming = false;
-  let audioCtx = null, osc = null, gain = null, sirenTimer = null, vibTimer = null;
-  let wakeLock = null;
-  let belowSince = null, recentMin = Infinity, minResetTimer = null;
+  const MODE_INFO = {
+    fall: 'Sounds the alarm when the phone is in free fall (near 0 g). Good for drops from a hand, table, or pocket.',
+    bike: 'For riding. Learns how your phone sits in your pocket, then alarms if it suddenly shifts or tilts out of position, drops partway, or falls. Browsers have no proximity sensor, so this uses motion only.'
+  };
 
-  thresh.oninput = () => $('threshVal').textContent = (+thresh.value).toFixed(2);
-  dur.oninput = () => $('durVal').textContent = dur.value;
+  let mode = 'fall';
+  let armed = false, alarming = false, calibrating = false;
+  let audioCtx = null, osc = null, sirenTimer = null, vibTimer = null;
+  let wakeLock = null, calibTimer = null, minResetTimer = null;
+
+  // detection state
+  let belowSince = null, recentMin = Infinity;
+  let fast = null, slow = null, lastT = 0;
+  let tiltSince = null, dipSince = null, lastDip = -1e9, cooldownUntil = 0;
 
   const canVibrate = 'vibrate' in navigator;
   $('support').textContent = canVibrate
     ? 'Vibration: supported on this browser.'
     : 'Vibration is not supported here (iPhone browsers can’t vibrate from web pages), so the screen flashes and the alarm sounds instead.';
 
+  const bind = (id, valId, fmt) => { $(id).oninput = () => $(valId).textContent = fmt($(id).value); };
+  bind('thresh', 'threshVal', v => (+v).toFixed(2));
+  bind('dur', 'durVal', v => v);
+  bind('tiltT', 'tiltTVal', v => v);
+  bind('hold', 'holdVal', v => v);
+  bind('dip', 'dipVal', v => (+v).toFixed(2));
+
   function showErr(msg) { errEl.textContent = msg; errEl.hidden = !msg; }
+  function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = 'status ' + (cls || ''); }
+
+  function setMode(m) {
+    mode = m;
+    modeBtns.forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+    $('modeinfo').textContent = MODE_INFO[m];
+    $('fallSettings').hidden = m !== 'fall';
+    $('bikeSettings').hidden = m !== 'bike';
+  }
+  modeBtns.forEach(b => b.onclick = () => { if (!armed) setMode(b.dataset.mode); });
+  setMode('fall');
+
+  function updateUI() {
+    modeBtns.forEach(b => b.disabled = armed || alarming);
+    if (alarming) {
+      toggleBtn.textContent = 'Silence alarm'; toggleBtn.classList.add('stop');
+    } else if (armed) {
+      toggleBtn.textContent = 'Disarm'; toggleBtn.classList.add('stop');
+      if (!calibrating) setStatus(mode === 'bike' ? 'Armed (biking) – keep page open and screen on' : 'Armed – keep page open and screen on', 'armed');
+    } else {
+      toggleBtn.textContent = 'Arm alarm'; toggleBtn.classList.remove('stop');
+      setStatus('Not armed');
+    }
+  }
 
   // ---------- Audio ----------
   function ensureAudio() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    // play a silent buffer to unlock audio on iOS
     const b = audioCtx.createBuffer(1, 1, 22050);
     const s = audioCtx.createBufferSource();
     s.buffer = b; s.connect(audioCtx.destination); s.start(0);
   }
-
   function startSiren() {
     ensureAudio();
     osc = audioCtx.createOscillator();
-    gain = audioCtx.createGain();
+    const gain = audioCtx.createGain();
     osc.type = 'square';
     gain.gain.value = 1;
     osc.connect(gain).connect(audioCtx.destination);
     osc.start();
     let hi = false;
-    const swap = () => {
-      hi = !hi;
-      osc.frequency.setValueAtTime(hi ? 1400 : 800, audioCtx.currentTime);
-    };
+    const swap = () => { hi = !hi; osc.frequency.setValueAtTime(hi ? 1400 : 800, audioCtx.currentTime); };
     swap();
     sirenTimer = setInterval(swap, 250);
   }
-
   function stopSiren() {
     clearInterval(sirenTimer); sirenTimer = null;
     if (osc) { try { osc.stop(); } catch (e) {} osc.disconnect(); osc = null; }
   }
 
   // ---------- Alarm ----------
-  function triggerAlarm() {
+  function triggerAlarm(reason) {
     if (alarming) return;
     alarming = true;
     document.body.classList.add('alarm');
-    setStatus('ALARM! Tap to silence', 'alarm');
-    toggleBtn.textContent = 'Silence alarm';
-    toggleBtn.classList.add('stop');
+    setStatus('ALARM' + (reason ? ' (' + reason + ')' : '') + ' – tap to silence', 'alarm');
+    $('trigInfo').textContent = reason || '';
     startSiren();
     if (canVibrate) {
       navigator.vibrate([400, 150, 400, 150, 400]);
       vibTimer = setInterval(() => navigator.vibrate([400, 150, 400, 150, 400]), 1300);
     }
+    updateUI();
   }
-
   function stopAlarm() {
     alarming = false;
     document.body.classList.remove('alarm');
     stopSiren();
     clearInterval(vibTimer); vibTimer = null;
     if (canVibrate) navigator.vibrate(0);
-    belowSince = null;
+    belowSince = tiltSince = dipSince = null;
+    if (fast) slow = fast.slice();           // re-learn current position
+    cooldownUntil = performance.now() + 3000;
+    updateUI();
   }
 
-  function setStatus(text, cls) {
-    statusEl.textContent = text;
-    statusEl.className = 'status ' + (cls || '');
+  // ---------- Vector helpers ----------
+  const mag = v => Math.hypot(v[0], v[1], v[2]);
+  const lerp = (a, b, k) => [a[0] + (b[0]-a[0])*k, a[1] + (b[1]-a[1])*k, a[2] + (b[2]-a[2])*k];
+  function angleDeg(a, b) {
+    const ma = mag(a), mb = mag(b);
+    if (ma < 2 || mb < 2) return 0;           // too small to trust (near free-fall)
+    const c = (a[0]*b[0] + a[1]*b[1] + a[2]*b[2]) / (ma * mb);
+    return Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
   }
 
   // ---------- Motion ----------
   function onMotion(e) {
     const a = e.accelerationIncludingGravity;
     if (!a || a.x == null) return;
-    const g = Math.hypot(a.x, a.y, a.z) / 9.81;
-
-    gEl.textContent = g.toFixed(2);
-    gBar.style.width = Math.min(g / 3, 1) * 100 + '%';
-    if (g < recentMin) { recentMin = g; gMinEl.textContent = g.toFixed(2); }
-
-    if (!armed || alarming) return;
-
     const now = performance.now();
-    if (g < +thresh.value) {
+    const dt = Math.min(Math.max(now - lastT, 1), 200);
+    lastT = now;
+
+    const v = [a.x, a.y, a.z];
+    const g = mag(v) / 9.81;
+    const r = e.rotationRate;
+    const rot = r && r.alpha != null ? Math.hypot(r.alpha, r.beta, r.gamma) : 0;
+
+    // gravity direction filters
+    if (!fast) { fast = v.slice(); slow = v.slice(); }
+    fast = lerp(fast, v, 1 - Math.exp(-dt / 400));
+    slow = lerp(slow, v, 1 - Math.exp(-dt / (calibrating ? 800 : 15000)));
+    const tilt = angleDeg(fast, slow);
+
+    $('g').textContent = g.toFixed(2);
+    $('tilt').textContent = mode === 'bike' ? Math.round(tilt) : '–';
+    $('rot').textContent = rot ? Math.round(rot) : '–';
+    $('gbar').style.width = Math.min(g / 3, 1) * 100 + '%';
+    if (g < recentMin) { recentMin = g; $('gmin').textContent = g.toFixed(2); }
+
+    if (!armed || alarming || calibrating || now < cooldownUntil) return;
+
+    if (mode === 'fall') {
+      if (g < +$('thresh').value) {
+        if (belowSince === null) belowSince = now;
+        else if (now - belowSince >= +$('dur').value) triggerAlarm('free-fall');
+      } else belowSince = null;
+      return;
+    }
+
+    // ----- Biking mode -----
+    const tiltT = +$('tiltT').value, hold = +$('hold').value, dipT = +$('dip').value;
+
+    // A) true free-fall
+    if (g < 0.25) {
       if (belowSince === null) belowSince = now;
-      else if (now - belowSince >= +dur.value) triggerAlarm();
-    } else {
-      belowSince = null;
+      else if (now - belowSince >= 80) return triggerAlarm('falling');
+    } else belowSince = null;
+
+    // B) partial drop (lighter than normal) – remember when it happened
+    if (g < dipT) {
+      if (dipSince === null) dipSince = now;
+      else if (now - dipSince >= 50) lastDip = now;
+    } else dipSince = null;
+
+    // C) position shifted away from where it was learned, and stayed there
+    if (tilt >= tiltT) {
+      if (tiltSince === null) tiltSince = now;
+      else if (now - tiltSince >= hold) return triggerAlarm('slid out of position');
+    } else tiltSince = null;
+
+    // D) partial drop plus a tilt or fast spin right around it
+    if (now - lastDip < 400 && (tilt >= tiltT * 0.5 || rot > 350)) {
+      return triggerAlarm('slipping');
     }
   }
 
   async function requestMotionPermission() {
     if (typeof DeviceMotionEvent === 'undefined') {
-      throw new Error('This device/browser has no motion sensor access. Try on your phone, not a laptop.');
+      throw new Error('This device/browser has no motion sensor access. Try it on your phone, not a laptop.');
     }
     if (typeof DeviceMotionEvent.requestPermission === 'function') {
       const res = await DeviceMotionEvent.requestPermission();
-      if (res !== 'granted') throw new Error('Motion permission denied. On iPhone: Settings > Safari > Motion & Orientation Access (or reload and allow).');
+      if (res !== 'granted') throw new Error('Motion permission denied. Reload the page and tap Allow when asked.');
     }
   }
-
   async function getWakeLock() {
-    try {
-      if ('wakeLock' in navigator) {
-        wakeLock = await navigator.wakeLock.request('screen');
-      }
-    } catch (e) { /* not critical */ }
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
   }
   document.addEventListener('visibilitychange', () => {
     if (armed && document.visibilityState === 'visible') getWakeLock();
@@ -208,53 +310,52 @@
       ensureAudio();
       await requestMotionPermission();
     } catch (e) { showErr(e.message); return; }
+    fast = slow = null; belowSince = tiltSince = dipSince = null; lastDip = -1e9;
+    lastT = performance.now();
     window.addEventListener('devicemotion', onMotion);
     await getWakeLock();
     armed = true;
-    belowSince = null;
-    toggleBtn.textContent = 'Disarm';
-    toggleBtn.classList.add('stop');
-    setStatus('Armed – keep this page open and screen on', 'armed');
     clearInterval(minResetTimer);
-    minResetTimer = setInterval(() => { recentMin = Infinity; gMinEl.textContent = '–'; }, 10000);
+    minResetTimer = setInterval(() => { recentMin = Infinity; $('gmin').textContent = '–'; }, 10000);
+
+    if (mode === 'bike') {
+      calibrating = true;
+      let n = 8;
+      setStatus('Put phone in your pocket… learning position (' + n + ')', 'armed');
+      calibTimer = setInterval(() => {
+        n--;
+        if (n <= 0) {
+          clearInterval(calibTimer);
+          calibrating = false;
+          cooldownUntil = performance.now() + 500;
+          updateUI();
+        } else setStatus('Put phone in your pocket… learning position (' + n + ')', 'armed');
+      }, 1000);
+    }
+    updateUI();
   }
 
   function disarm() {
-    armed = false;
+    armed = false; calibrating = false;
+    clearInterval(calibTimer);
     stopAlarm();
     window.removeEventListener('devicemotion', onMotion);
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     clearInterval(minResetTimer);
-    toggleBtn.textContent = 'Arm alarm';
-    toggleBtn.classList.remove('stop');
-    setStatus('Not armed');
+    $('trigInfo').textContent = '';
+    updateUI();
   }
 
   toggleBtn.onclick = () => {
-    if (alarming) {
-      // silence but stay armed
-      stopAlarm();
-      toggleBtn.textContent = 'Disarm';
-      setStatus('Armed – keep this page open and screen on', 'armed');
-    } else if (armed) {
-      disarm();
-    } else {
-      arm();
-    }
+    if (alarming) stopAlarm();      // silence; stays armed if it was armed
+    else if (armed) disarm();
+    else arm();
   };
 
   $('test').onclick = () => {
     ensureAudio();
-    if (!armed) {
-      // allow testing without arming
-      armed = true; triggerAlarm(); armed = false;
-      toggleBtn.textContent = 'Silence alarm';
-      toggleBtn.onclick = () => { stopAlarm(); toggleBtn.textContent = 'Arm alarm'; toggleBtn.classList.remove('stop'); setStatus('Not armed'); toggleBtn.onclick = origClick; };
-    } else {
-      triggerAlarm();
-    }
+    if (!alarming) triggerAlarm('test');
   };
-  const origClick = toggleBtn.onclick;
 })();
 </script>
 </body>
